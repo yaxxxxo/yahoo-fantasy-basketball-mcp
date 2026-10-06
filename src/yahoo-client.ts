@@ -9,157 +9,127 @@ import {
   SESSION_TTL,
 } from "./cache.js";
 import { getStatMapping, mapStats } from "./stat-mapping.js";
+import { YahooApiError, describeYahooError } from "./errors.js";
 
-function getCredentials(): { clientId: string; clientSecret: string } {
+export interface FreeAgentOptions {
+  position?: string;
+  sort_by?: string;
+  sort_type?: "season" | "lastweek" | "lastmonth" | "date" | "average_season";
+  limit?: number;
+}
+
+/** What the tools need from Yahoo. Every method rejects with YahooApiError on failure. */
+export interface YahooApi {
+  getLeagueSettings(leagueKey: string): Promise<unknown>;
+  getStandings(leagueKey: string): Promise<unknown>;
+  getScoreboard(leagueKey: string, week?: number): Promise<unknown>;
+  getTeams(leagueKey: string): Promise<unknown>;
+  getTeamRoster(leagueKey: string, teamKey: string): Promise<unknown>;
+  searchPlayers(leagueKey: string, name: string): Promise<unknown>;
+  getFreeAgents(leagueKey: string, options?: FreeAgentOptions): Promise<unknown>;
+  getPlayerStats(leagueKey: string, playerKey: string): Promise<unknown>;
+}
+
+function createYahooFantasy(): YahooFantasy {
   const clientId = process.env.YAHOO_CLIENT_ID;
   const clientSecret = process.env.YAHOO_CLIENT_SECRET;
 
   if (!clientId) {
-    throw new Error(
-      "Missing required environment variable: YAHOO_CLIENT_ID."
-    );
+    throw new Error("Missing required environment variable: YAHOO_CLIENT_ID.");
   }
   if (!clientSecret) {
-    throw new Error(
-      "Missing required environment variable: YAHOO_CLIENT_SECRET."
-    );
+    throw new Error("Missing required environment variable: YAHOO_CLIENT_SECRET.");
   }
 
-  return { clientId, clientSecret };
+  return new YahooFantasy(clientId, clientSecret);
 }
 
-export class YahooClient {
-  private yf: YahooFantasy;
+export interface YahooClientDeps {
+  createYahooFantasy?: () => YahooFantasy;
+  getAccessToken?: () => Promise<string>;
+}
 
-  constructor() {
-    const { clientId, clientSecret } = getCredentials();
-    this.yf = new YahooFantasy(clientId, clientSecret);
+export class YahooClient implements YahooApi {
+  private yf?: YahooFantasy;
+  private readonly createYahooFantasy: () => YahooFantasy;
+  private readonly getAccessToken: () => Promise<string>;
+
+  constructor(deps: YahooClientDeps = {}) {
+    this.createYahooFantasy = deps.createYahooFantasy ?? createYahooFantasy;
+    this.getAccessToken = deps.getAccessToken ?? getAccessToken;
   }
 
-  /** Set a fresh access token before every API call. */
-  private async authenticate(): Promise<void> {
-    const token = await getAccessToken();
-    this.yf.setUserToken(token);
+  /** Serve from cache, or call Yahoo with a fresh access token and cache the answer. Failures are never cached. */
+  private async cached<T>(
+    cacheKey: string,
+    ttlMs: number,
+    request: (yf: YahooFantasy) => Promise<T>
+  ): Promise<T> {
+    const hit = cache.get<T>(cacheKey);
+    if (hit !== undefined) return hit;
+
+    this.yf ??= this.createYahooFantasy();
+    this.yf.setUserToken(await this.getAccessToken());
+
+    let result: T;
+    try {
+      result = await request(this.yf);
+    } catch (err: unknown) {
+      throw new YahooApiError(describeYahooError(err), { cause: err });
+    }
+    cache.set(cacheKey, result, ttlMs);
+    return result;
   }
 
   // ---------------------------------------------------------------------------
   // League info
   // ---------------------------------------------------------------------------
 
-  async getLeagueSettings(leagueKey: string): Promise<any> {
-    const cacheKey = `league_settings:${leagueKey}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    await this.authenticate();
-    try {
-      const result = await this.yf.league.settings(leagueKey);
-      cache.set(cacheKey, result, SESSION_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+  getLeagueSettings(leagueKey: string): Promise<any> {
+    return this.cached(`league_settings:${leagueKey}`, SESSION_TTL, (yf) =>
+      yf.league.settings(leagueKey)
+    );
   }
 
-  async getStandings(leagueKey: string): Promise<any> {
-    const cacheKey = `standings:${leagueKey}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    await this.authenticate();
-    try {
-      const result = await this.yf.league.standings(leagueKey);
-      cache.set(cacheKey, result, STANDINGS_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+  getStandings(leagueKey: string): Promise<any> {
+    return this.cached(`standings:${leagueKey}`, STANDINGS_TTL, (yf) =>
+      yf.league.standings(leagueKey)
+    );
   }
 
-  async getScoreboard(leagueKey: string, week?: number): Promise<any> {
-    const cacheKey = `scoreboard:${leagueKey}:${week ?? "current"}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    await this.authenticate();
-    try {
+  getScoreboard(leagueKey: string, week?: number): Promise<any> {
+    return this.cached(`scoreboard:${leagueKey}:${week ?? "current"}`, SCOREBOARD_TTL, (yf) =>
       // Only pass week if defined — yahoo-fantasy builds `;week=undefined` otherwise
-      const result = week !== undefined
-        ? await this.yf.league.scoreboard(leagueKey, week)
-        : await this.yf.league.scoreboard(leagueKey);
-      cache.set(cacheKey, result, SCOREBOARD_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+      week !== undefined ? yf.league.scoreboard(leagueKey, week) : yf.league.scoreboard(leagueKey)
+    );
   }
 
-  async getTeams(leagueKey: string): Promise<any> {
-    const cacheKey = `teams:${leagueKey}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    await this.authenticate();
-    try {
-      const result = await this.yf.league.teams(leagueKey);
-      cache.set(cacheKey, result, STANDINGS_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+  getTeams(leagueKey: string): Promise<any> {
+    return this.cached(`teams:${leagueKey}`, STANDINGS_TTL, (yf) => yf.league.teams(leagueKey));
   }
 
-  async getTeamRoster(leagueKey: string, teamKey: string): Promise<any> {
-    const cacheKey = `roster:${leagueKey}:${teamKey}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    await this.authenticate();
-    try {
-      const result = await this.yf.team.roster(teamKey);
-      cache.set(cacheKey, result, ROSTER_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+  getTeamRoster(leagueKey: string, teamKey: string): Promise<any> {
+    return this.cached(`roster:${leagueKey}:${teamKey}`, ROSTER_TTL, (yf) =>
+      yf.team.roster(teamKey)
+    );
   }
 
   // ---------------------------------------------------------------------------
   // Player data
   // ---------------------------------------------------------------------------
 
-  async searchPlayers(leagueKey: string, name: string): Promise<any> {
-    const cacheKey = `search_players:${leagueKey}:${name}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
-
-    await this.authenticate();
-    try {
+  searchPlayers(leagueKey: string, name: string): Promise<any> {
+    return this.cached(`search_players:${leagueKey}:${name}`, PLAYER_TTL, (yf) =>
       // yahoo-fantasy exposes league player queries via yf.players.leagues
-      const result = await this.yf.players.leagues(leagueKey, { search: name });
-      cache.set(cacheKey, result, PLAYER_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+      yf.players.leagues(leagueKey, { search: name })
+    );
   }
 
-  async getFreeAgents(
-    leagueKey: string,
-    options: {
-      position?: string;
-      sort_by?: string;
-      sort_type?: "season" | "lastweek" | "lastmonth" | "date" | "average_season";
-      limit?: number;
-    } = {}
-  ): Promise<any> {
+  getFreeAgents(leagueKey: string, options: FreeAgentOptions = {}): Promise<any> {
     const { position, sort_by, sort_type, limit } = options;
     const cacheKey = `free_agents:${leagueKey}:${position ?? ""}:${sort_by ?? ""}:${sort_type ?? ""}:${limit ?? ""}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
 
-    await this.authenticate();
-    try {
+    return this.cached(cacheKey, PLAYER_TTL, (yf) => {
       const filters: Record<string, unknown> = { status: "FA" };
       if (position) filters["position"] = position;
       if (sort_by) filters["sort"] = resolveSortKey(sort_by);
@@ -167,42 +137,27 @@ export class YahooClient {
       if (limit !== undefined) filters["count"] = limit;
 
       // Request stats subresource so players come with their averages attached
-      const result = await this.yf.players.leagues(leagueKey, filters, "stats");
-      cache.set(cacheKey, result, PLAYER_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+      return yf.players.leagues(leagueKey, filters, "stats");
+    });
   }
 
   async getPlayerStats(leagueKey: string, playerKey: string): Promise<any> {
-    const cacheKey = `player_stats:${leagueKey}:${playerKey}`;
-    const cached = cache.get<any>(cacheKey);
-    if (cached !== undefined) return cached;
+    const rawStats = await this.cached(`player_stats:${leagueKey}:${playerKey}`, PLAYER_TTL, (yf) =>
+      yf.player.stats(playerKey)
+    );
 
-    await this.authenticate();
-    try {
-      const rawStats = await this.yf.player.stats(playerKey);
+    // Map stat IDs to human-readable names using league settings.
+    const statMap = await getStatMapping(leagueKey, () => this.getLeagueSettings(leagueKey));
 
-      // Map stat IDs to human-readable names using league settings.
-      const statMap = await getStatMapping(() => this.getLeagueSettings(leagueKey));
+    // The yahoo-fantasy package typically returns stats under player_stats.stats.stat
+    const statArray: Array<{ stat_id: string | number; value: string }> =
+      rawStats?.player_stats?.stats?.stat ?? [];
 
-      // The yahoo-fantasy package typically returns stats under player_stats.stats.stat
-      const statArray: Array<{ stat_id: string | number; value: string }> =
-        rawStats?.player_stats?.stats?.stat ?? [];
-
-      const result = {
-        ...rawStats,
-        mapped_stats: statArray.length > 0 ? mapStats(statArray, statMap) : {},
-      };
-
-      cache.set(cacheKey, result, PLAYER_TTL);
-      return result;
-    } catch (err: unknown) {
-      return { error: formatError(err) };
-    }
+    return {
+      ...rawStats,
+      mapped_stats: statArray.length > 0 ? mapStats(statArray, statMap) : {},
+    };
   }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -223,12 +178,3 @@ function resolveSortKey(sortBy: string): string {
   const normalized = sortBy.toUpperCase();
   return SORT_ABBREVIATION_TO_STAT_ID[normalized] ?? sortBy;
 }
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
-
-export const yahooClient = new YahooClient();

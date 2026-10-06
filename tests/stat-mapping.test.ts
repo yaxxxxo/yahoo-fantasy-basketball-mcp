@@ -70,27 +70,37 @@ describe("getStatMapping", () => {
     cache.clear();
   });
 
-  it("returns cached value if available", async () => {
-    const customMap = { "15": "PTS_CUSTOM" };
-    cache.set("stat_mapping", customMap, Number.MAX_SAFE_INTEGER);
+  const settingsWith = (displayName: string) => ({
+    stat_categories: { stats: { stat: [{ stat_id: "15", display_name: displayName }] } },
+  });
 
-    const fetchLeagueSettings = vi.fn().mockResolvedValue({});
-    const result = await getStatMapping(fetchLeagueSettings);
+  it("fetches a league's settings only once", async () => {
+    const fetchLeagueSettings = vi.fn().mockResolvedValue(settingsWith("PTS_CUSTOM"));
 
-    expect(result).toEqual(customMap);
-    expect(fetchLeagueSettings).not.toHaveBeenCalled();
+    await getStatMapping("nba.l.1", fetchLeagueSettings);
+    const result = await getStatMapping("nba.l.1", fetchLeagueSettings);
+
+    expect(result).toEqual({ "15": "PTS_CUSTOM" });
+    expect(fetchLeagueSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps each league's mapping separate", async () => {
+    await getStatMapping("nba.l.1", async () => settingsWith("Points"));
+    const other = await getStatMapping("nba.l.2", async () => settingsWith("PTS"));
+
+    expect(other).toEqual({ "15": "PTS" });
   });
 
   it("falls back to DEFAULT_STAT_MAP on fetch error", async () => {
     const fetchLeagueSettings = vi.fn().mockRejectedValue(new Error("Network error"));
-    const result = await getStatMapping(fetchLeagueSettings);
+    const result = await getStatMapping("nba.l.1", fetchLeagueSettings);
 
     expect(result).toEqual(DEFAULT_STAT_MAP);
   });
 
   it("falls back to DEFAULT_STAT_MAP when settings have no stat categories", async () => {
     const fetchLeagueSettings = vi.fn().mockResolvedValue({});
-    const result = await getStatMapping(fetchLeagueSettings);
+    const result = await getStatMapping("nba.l.1", fetchLeagueSettings);
 
     expect(result).toEqual(DEFAULT_STAT_MAP);
   });
@@ -107,7 +117,7 @@ describe("getStatMapping", () => {
       },
     });
 
-    const result = await getStatMapping(fetchLeagueSettings);
+    const result = await getStatMapping("nba.l.1", fetchLeagueSettings);
     expect(result).toEqual({ "1": "GP", "2": "GS" });
   });
 });
