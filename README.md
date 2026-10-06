@@ -74,6 +74,11 @@ On first tool call, the server opens a browser for Yahoo OAuth authorization. Af
 ## Development
 
 ```bash
-npm run build    # Compile TypeScript
-npm test         # Run tests
+npm run build       # Compile TypeScript
+npm test            # Run tests once
+npm run test:watch  # Re-run tests on change
 ```
+
+## Troubleshooting
+
+Tool failures come back as error results carrying Yahoo's own message. If Yahoo answers "This application is not authorized to perform this action", delete `~/.config/yahoo-fantasy-mcp/tokens.json`, call any tool to sign in again, and check that the Yahoo developer app still has Fantasy Sports read permission.

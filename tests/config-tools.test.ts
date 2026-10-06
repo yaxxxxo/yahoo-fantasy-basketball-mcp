@@ -1,98 +1,61 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { handleConfigTool, getDefaultLeagueKey } from "../src/config-tools.js";
+import { describe, it, expect } from "vitest";
+import { configTools, resolveLeagueKey } from "../src/config-tools.js";
+import { runTool } from "../src/tool.js";
+import { fakeContext } from "./helpers/fakes.js";
 
-// Mock the token-store module to avoid filesystem access
-vi.mock("../src/token-store.js", () => ({
-  loadConfig: vi.fn(),
-  saveConfig: vi.fn(),
-}));
+const [setDefaultLeague] = configTools;
 
-import { loadConfig, saveConfig } from "../src/token-store.js";
+describe("set_default_league", () => {
+  it("saves a well-formed league key as the default", async () => {
+    const { ctx, config } = fakeContext();
 
-const mockLoadConfig = vi.mocked(loadConfig);
-const mockSaveConfig = vi.mocked(saveConfig);
+    const result = await runTool(setDefaultLeague, { league_key: "nba.l.12345" }, ctx);
 
-describe("handleConfigTool", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSaveConfig.mockResolvedValue(undefined);
-  });
-
-  it("set_default_league validates valid league_key format", async () => {
-    const result = await handleConfigTool("set_default_league", {
-      league_key: "nba.l.12345",
-    });
-
-    expect(mockSaveConfig).toHaveBeenCalledWith({ default_league_key: "nba.l.12345" });
-    expect(result.content[0].type).toBe("text");
+    expect(config.save).toHaveBeenCalledWith({ default_league_key: "nba.l.12345" });
+    expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain("nba.l.12345");
   });
 
-  it("rejects invalid league_key format (missing sport prefix)", async () => {
-    await expect(
-      handleConfigTool("set_default_league", { league_key: "invalid-key" })
-    ).rejects.toThrow(/Invalid league_key format/);
-  });
+  it.each(["invalid-key", "nba_l_12345", "nba.l.abc", "NBA.l.12345"])(
+    "rejects malformed league key %s without saving",
+    async (league_key) => {
+      const { ctx, config } = fakeContext();
 
-  it("rejects invalid league_key format (wrong separator)", async () => {
-    await expect(
-      handleConfigTool("set_default_league", { league_key: "nba_l_12345" })
-    ).rejects.toThrow(/Invalid league_key format/);
-  });
+      const result = await runTool(setDefaultLeague, { league_key }, ctx);
 
-  it("rejects invalid league_key format (non-numeric league id)", async () => {
-    await expect(
-      handleConfigTool("set_default_league", { league_key: "nba.l.abc" })
-    ).rejects.toThrow();
-  });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/Invalid league_key format/);
+      expect(config.save).not.toHaveBeenCalled();
+    }
+  );
 
-  it("rejects uppercase sport prefix", async () => {
-    await expect(
-      handleConfigTool("set_default_league", { league_key: "NBA.l.12345" })
-    ).rejects.toThrow(/Invalid league_key format/);
-  });
+  it("reports a missing league key as an error", async () => {
+    const { ctx } = fakeContext();
 
-  it("throws for unknown tool name", async () => {
-    await expect(
-      handleConfigTool("unknown_tool", {})
-    ).rejects.toThrow(/Unknown config tool/);
-  });
+    const result = await runTool(setDefaultLeague, {}, ctx);
 
-  it("throws when league_key is missing from args", async () => {
-    await expect(
-      handleConfigTool("set_default_league", {})
-    ).rejects.toThrow();
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/league_key/);
   });
 });
 
-describe("getDefaultLeagueKey", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("resolveLeagueKey", () => {
+  it("prefers an explicit key without reading config", async () => {
+    const { ctx, config } = fakeContext();
+
+    expect(await resolveLeagueKey(ctx, "nba.l.99999")).toBe("nba.l.99999");
+    expect(config.load).not.toHaveBeenCalled();
   });
 
-  it("returns explicit key when provided", async () => {
-    const result = await getDefaultLeagueKey("nba.l.99999");
-    expect(result).toBe("nba.l.99999");
-    expect(mockLoadConfig).not.toHaveBeenCalled();
+  it("falls back to the configured default league", async () => {
+    const { ctx } = fakeContext({ default_league_key: "nba.l.54321" });
+
+    expect(await resolveLeagueKey(ctx)).toBe("nba.l.54321");
   });
 
-  it("returns key from config when no explicit key provided", async () => {
-    mockLoadConfig.mockResolvedValue({ default_league_key: "nba.l.54321" });
-    const result = await getDefaultLeagueKey();
-    expect(result).toBe("nba.l.54321");
-  });
+  it("fails when there is neither an explicit key nor a default", async () => {
+    const { ctx } = fakeContext({});
 
-  it("throws when no key available and config has no default", async () => {
-    mockLoadConfig.mockResolvedValue({});
-    await expect(getDefaultLeagueKey()).rejects.toThrow(
-      /No league specified/
-    );
-  });
-
-  it("throws when no key available and config default_league_key is undefined", async () => {
-    mockLoadConfig.mockResolvedValue({ default_league_key: undefined });
-    await expect(getDefaultLeagueKey()).rejects.toThrow(
-      /No league specified/
-    );
+    await expect(resolveLeagueKey(ctx)).rejects.toThrow(/No league specified/);
   });
 });

@@ -1,9 +1,14 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { server } from "./server.js";
+import { createServer } from "./server.js";
+import { YahooClient } from "./yahoo-client.js";
+import { loadConfig, saveConfig } from "./token-store.js";
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const server = createServer({
+    yahoo: new YahooClient(),
+    config: { load: loadConfig, save: saveConfig },
+  });
+  await server.connect(new StdioServerTransport());
   console.error("Yahoo Fantasy Basketball MCP server started");
 }
 

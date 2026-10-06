@@ -1,6 +1,6 @@
 import { cache, SESSION_TTL } from "./cache.js";
 
-const STAT_MAP_CACHE_KEY = "stat_mapping";
+const statMapCacheKey = (leagueKey: string) => `stat_mapping:${leagueKey}`;
 
 export const DEFAULT_STAT_MAP: Record<string, string> = {
   "5": "FGA",
@@ -34,9 +34,11 @@ export const DEFAULT_STAT_MAP: Record<string, string> = {
 };
 
 export async function getStatMapping(
+  leagueKey: string,
   fetchLeagueSettings: () => Promise<any>
 ): Promise<Record<string, string>> {
-  const cached = cache.get<Record<string, string>>(STAT_MAP_CACHE_KEY);
+  const cacheKey = statMapCacheKey(leagueKey);
+  const cached = cache.get<Record<string, string>>(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
@@ -60,7 +62,7 @@ export async function getStatMapping(
         }
       }
       if (Object.keys(mapping).length > 0) {
-        cache.set(STAT_MAP_CACHE_KEY, mapping, SESSION_TTL);
+        cache.set(cacheKey, mapping, SESSION_TTL);
         return mapping;
       }
     }
@@ -68,7 +70,7 @@ export async function getStatMapping(
     // Fall through to default map
   }
 
-  cache.set(STAT_MAP_CACHE_KEY, DEFAULT_STAT_MAP, SESSION_TTL);
+  cache.set(cacheKey, DEFAULT_STAT_MAP, SESSION_TTL);
   return DEFAULT_STAT_MAP;
 }
 

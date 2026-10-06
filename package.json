@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
-    "test": "vitest"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

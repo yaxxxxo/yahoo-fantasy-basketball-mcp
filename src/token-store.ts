@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -37,7 +37,9 @@ export async function loadTokens(): Promise<Tokens | null> {
 export async function saveTokens(tokens: Tokens): Promise<void> {
   await ensureConfigDir();
   const filePath = join(getConfigDir(), "tokens.json");
-  await writeFile(filePath, JSON.stringify(tokens, null, 2), "utf-8");
+  await writeFile(filePath, JSON.stringify(tokens, null, 2), { encoding: "utf-8", mode: 0o600 });
+  // mode only applies when the file is created; tighten files written by older versions
+  await chmod(filePath, 0o600);
 }
 
 export async function loadConfig(): Promise<AppConfig> {
